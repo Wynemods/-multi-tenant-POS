@@ -127,9 +127,9 @@ const Products = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h2 className="text-3xl font-display font-bold text-gray-800">Products</h2>
+        <h2 className="text-2xl font-display font-bold text-gray-800">Products</h2>
         {!isReadOnly && (
           <button
             onClick={() => {
@@ -146,62 +146,70 @@ const Products = () => {
               })
               setShowModal(true)
             }}
-            className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+            className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 text-sm font-medium"
           >
             + Add Product
           </button>
         )}
       </div>
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
+      <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
+        <table className="min-w-full border-collapse">
+          <thead className="bg-gray-50 border-b-2 border-gray-300">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase border-r border-gray-200">Name</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase border-r border-gray-200">Category</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase border-r border-gray-200">Price</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase border-r border-gray-200">Stock</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 uppercase">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {products.map(product => (
-              <tr key={product.id}>
-                <td className="px-6 py-4 whitespace-nowrap font-medium">{product.name}</td>
-                <td className="px-6 py-4 whitespace-nowrap text-gray-500">{product.category || '-'}</td>
-                <td className="px-6 py-4 whitespace-nowrap">{formatCurrency(product.price)}</td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  {product.stock_quantity <= 0 ? (
-                    <span className="text-red-600 font-semibold">Out of Stock</span>
-                  ) : (
-                    <span className={product.stock_quantity <= (product.min_stock_level || 0) ? 'text-red-600 font-semibold' : ''}>
-                      {product.stock_quantity}
-                    </span>
-                  )}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  {!isReadOnly && (
-                    <>
-                      <button
-                        onClick={() => handleEdit(product)}
-                        className="text-primary-600 hover:text-primary-700 mr-3"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => handleDelete(product.id)}
-                        className="text-red-600 hover:text-red-700"
-                      >
-                        Delete
-                      </button>
-                    </>
-                  )}
-                  {isReadOnly && (
-                    <span className="text-gray-400 text-sm">Read Only</span>
-                  )}
+            {products.length === 0 ? (
+              <tr>
+                <td colSpan="5" className="px-4 py-8 text-center text-gray-500 text-sm border-r border-gray-200">
+                  No products found. {!isReadOnly && 'Click "Add Product" to create your first product.'}
                 </td>
               </tr>
-            ))}
+            ) : (
+              products.map((product, index) => (
+                <tr key={product.id} className={`hover:bg-gray-50 transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                  <td className="px-4 py-2 whitespace-nowrap font-medium text-sm border-r border-gray-200">{product.name}</td>
+                  <td className="px-4 py-2 whitespace-nowrap text-gray-600 text-sm border-r border-gray-200">{product.category || '-'}</td>
+                  <td className="px-4 py-2 whitespace-nowrap text-sm border-r border-gray-200">{formatCurrency(product.price)}</td>
+                  <td className="px-4 py-2 whitespace-nowrap text-sm border-r border-gray-200">
+                    {product.stock_quantity <= 0 ? (
+                      <span className="text-red-600 font-semibold text-xs">Out of Stock</span>
+                    ) : (
+                      <span className={product.stock_quantity <= (product.min_stock_level || 0) ? 'text-red-600 font-semibold' : 'text-gray-700'}>
+                        {product.stock_quantity}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 whitespace-nowrap">
+                    {!isReadOnly && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleEdit(product)}
+                          className="text-primary-600 hover:text-primary-700 text-sm font-medium px-2 py-1 rounded hover:bg-primary-50 transition-colors"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(product.id)}
+                          className="text-red-600 hover:text-red-700 text-sm font-medium px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                    {isReadOnly && (
+                      <span className="text-gray-400 text-xs">Read Only</span>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>

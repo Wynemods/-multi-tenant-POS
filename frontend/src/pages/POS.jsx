@@ -3,6 +3,7 @@ import api from '../utils/api'
 import { useToast } from '../context/ToastContext'
 import { formatCurrency } from '../utils/formatters'
 import { useAuth } from '../context/AuthContext'
+import { getServiceIcon, getServiceIconColor } from '../utils/serviceIcons'
 
 const POS = () => {
   const [products, setProducts] = useState([])
@@ -185,14 +186,19 @@ const POS = () => {
                   key={service.id}
                   onClick={() => !isReadOnly && addToCart(service, 'service')}
                   disabled={isReadOnly}
-                  className={`p-4 bg-white border border-gray-200 rounded-lg transition-all text-left ${
+                  className={`p-4 bg-white border border-gray-200 rounded-lg transition-all text-left flex items-center gap-3 ${
                     isReadOnly 
                       ? 'opacity-50 cursor-not-allowed' 
                       : 'hover:border-accent-500 hover:shadow-md cursor-pointer'
                   }`}
                 >
-                  <p className="font-medium text-gray-900">{service.name}</p>
-                  <p className="text-accent-600 font-semibold mt-1">{formatCurrency(service.price)}</p>
+                  <div className={`flex-shrink-0 ${getServiceIconColor(service.name)}`}>
+                    {getServiceIcon(service.name)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-900 truncate">{service.name}</p>
+                    <p className="text-accent-600 font-semibold mt-1">{formatCurrency(service.price)}</p>
+                  </div>
                 </button>
               ))}
             </div>
