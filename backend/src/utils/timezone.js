@@ -79,3 +79,43 @@ export const convertToEAT = (utcDateTime) => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
+/**
+ * Get current Date object representing EAT time
+ * This creates a Date object that, when stored in PostgreSQL (UTC), 
+ * will display correctly as EAT time when retrieved and formatted
+ * @returns {Date} Date object representing current EAT time
+ */
+export const getEATDateObject = () => {
+  // Get current time in Nairobi timezone
+  const now = new Date()
+  
+  // Get the time components in Nairobi timezone
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Nairobi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  })
+  
+  const parts = formatter.formatToParts(now)
+  const year = parseInt(parts.find(p => p.type === 'year').value)
+  const month = parseInt(parts.find(p => p.type === 'month').value) - 1 // JS months are 0-indexed
+  const day = parseInt(parts.find(p => p.type === 'day').value)
+  const hours = parseInt(parts.find(p => p.type === 'hour').value)
+  const minutes = parseInt(parts.find(p => p.type === 'minute').value)
+  const seconds = parseInt(parts.find(p => p.type === 'second').value)
+  
+  // Create a Date object using the EAT components interpreted as UTC
+  // Then subtract 3 hours to get the correct UTC time
+  // This ensures when PostgreSQL stores it as UTC and we convert back to EAT, 
+  // we get the original EAT time
+  const eatAsUTC = new Date(Date.UTC(year, month, day, hours, minutes, seconds))
+  const utcEquivalent = new Date(eatAsUTC.getTime() - (3 * 60 * 60 * 1000))
+  
+  return utcEquivalent
+}
+

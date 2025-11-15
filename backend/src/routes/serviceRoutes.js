@@ -2,37 +2,50 @@ import express from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { authenticate, authorize, setShopDb } from '../middleware/auth.js'
 import { blockManagerWrites } from '../middleware/readOnly.js'
-import { getEATDateTime } from '../utils/timezone.js'
+import { getEATDateTime, getEATDateObject } from '../utils/timezone.js'
 
 const router = express.Router()
 
 router.use(authenticate, setShopDb)
 
 // Get all services
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const services = req.db.prepare('SELECT * FROM services WHERE is_active = 1 ORDER BY name').all()
+    const services = await req.prisma.service.findMany({
+      where: {
+        shopId: req.shopId,
+        isActive: true
+      },
+      orderBy: { name: 'asc' }
+    })
     res.json(services)
   } catch (error) {
+    console.error('Error fetching services:', error)
     res.status(500).json({ message: 'Error fetching services' })
   }
 })
 
 // Get single service
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const service = req.db.prepare('SELECT * FROM services WHERE id = ?').get(req.params.id)
+    const service = await req.prisma.service.findFirst({
+      where: {
+        id: req.params.id,
+        shopId: req.shopId
+      }
+    })
     if (!service) {
       return res.status(404).json({ message: 'Service not found' })
     }
     res.json(service)
   } catch (error) {
+    console.error('Error fetching service:', error)
     res.status(500).json({ message: 'Error fetching service' })
   }
 })
 
 // Create service (admin and cashier only, manager blocked)
-router.post('/', authorize('admin', 'manager', 'cashier'), blockManagerWrites, (req, res) => {
+router.post('/', authorize('admin', 'manager', 'cashier'), blockManagerWrites, async (req, res) => {
   try {
     const { name, description, price, duration_minutes, is_active } = req.body
     
@@ -45,40 +58,36 @@ router.post('/', authorize('admin', 'manager', 'cashier'), blockManagerWrites, (
       return res.status(400).json({ message: 'Price must be a valid positive number' })
     }
     
-    if (!req.db) {
-      console.error('Database connection not available')
-      return res.status(500).json({ message: 'Database connection error' })
-    }
-    
     const id = uuidv4()
     const duration = duration_minutes ? parseInt(duration_minutes) : null
-    const active = is_active !== undefined ? (is_active ? 1 : 0) : 1
-    const createdAt = getEATDateTime()
+    const active = is_active !== undefined ? is_active : true
+    const createdAt = getEATDateObject() // Use EAT timezone
     
-    req.db.prepare(`
-      INSERT INTO services (id, name, description, price, duration_minutes, is_active, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, name, description || null, priceNum, duration, active, createdAt)
+    const service = await req.prisma.service.create({
+      data: {
+        id: id,
+        shopId: req.shopId,
+        name: name,
+        description: description || null,
+        price: priceNum,
+        durationMinutes: duration,
+        isActive: active,
+        createdAt: createdAt
+      }
+    })
     
-    const service = req.db.prepare('SELECT * FROM services WHERE id = ?').get(id)
     res.status(201).json(service)
   } catch (error) {
     console.error('Error creating service:', error)
-    console.error('Error details:', {
-      message: error.message,
-      code: error.code,
-      stack: error.stack
-    })
     res.status(500).json({ 
       message: 'Error creating service', 
-      error: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: error.message
     })
   }
 })
 
 // Update service (admin and cashier only, manager blocked)
-router.put('/:id', authorize('admin', 'manager', 'cashier'), blockManagerWrites, (req, res) => {
+router.put('/:id', authorize('admin', 'manager', 'cashier'), blockManagerWrites, async (req, res) => {
   try {
     const { name, description, price, duration_minutes, is_active } = req.body
     
@@ -91,24 +100,32 @@ router.put('/:id', authorize('admin', 'manager', 'cashier'), blockManagerWrites,
       return res.status(400).json({ message: 'Price must be a valid positive number' })
     }
     
-    if (!req.db) {
-      console.error('Database connection not available')
-      return res.status(500).json({ message: 'Database connection error' })
+    // Check if service exists and belongs to shop
+    const existingService = await req.prisma.service.findFirst({
+      where: {
+        id: req.params.id,
+        shopId: req.shopId
+      }
+    })
+    
+    if (!existingService) {
+      return res.status(404).json({ message: 'Service not found' })
     }
     
     const duration = duration_minutes ? parseInt(duration_minutes) : null
-    const active = is_active !== undefined ? (is_active ? 1 : 0) : 1
+    const active = is_active !== undefined ? is_active : existingService.isActive
     
-    req.db.prepare(`
-      UPDATE services 
-      SET name = ?, description = ?, price = ?, duration_minutes = ?, is_active = ?
-      WHERE id = ?
-    `).run(name, description || null, priceNum, duration, active, req.params.id)
+    const service = await req.prisma.service.update({
+      where: { id: req.params.id },
+      data: {
+        name: name,
+        description: description || null,
+        price: priceNum,
+        durationMinutes: duration,
+        isActive: active
+      }
+    })
     
-    const service = req.db.prepare('SELECT * FROM services WHERE id = ?').get(req.params.id)
-    if (!service) {
-      return res.status(404).json({ message: 'Service not found' })
-    }
     res.json(service)
   } catch (error) {
     console.error('Error updating service:', error)
@@ -117,11 +134,29 @@ router.put('/:id', authorize('admin', 'manager', 'cashier'), blockManagerWrites,
 })
 
 // Delete service (admin only)
-router.delete('/:id', authorize('admin'), (req, res) => {
+router.delete('/:id', authorize('admin'), async (req, res) => {
   try {
-    req.db.prepare('UPDATE services SET is_active = 0 WHERE id = ?').run(req.params.id)
+    // Check if service exists and belongs to shop
+    const service = await req.prisma.service.findFirst({
+      where: {
+        id: req.params.id,
+        shopId: req.shopId
+      }
+    })
+    
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' })
+    }
+    
+    // Soft delete by setting isActive to false
+    await req.prisma.service.update({
+      where: { id: req.params.id },
+      data: { isActive: false }
+    })
+    
     res.json({ message: 'Service deleted' })
   } catch (error) {
+    console.error('Error deleting service:', error)
     res.status(500).json({ message: 'Error deleting service' })
   }
 })

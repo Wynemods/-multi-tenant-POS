@@ -2,7 +2,7 @@ import express from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { authenticate, authorize, setShopDb } from '../middleware/auth.js'
 import { blockManagerWrites } from '../middleware/readOnly.js'
-import { getEATDateTime } from '../utils/timezone.js'
+import { getEATDateTime, getEATDateObject } from '../utils/timezone.js'
 
 const router = express.Router()
 
@@ -10,30 +10,40 @@ const router = express.Router()
 router.use(authenticate, setShopDb)
 
 // Get all products
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const products = req.db.prepare('SELECT * FROM products ORDER BY name').all()
+    const products = await req.prisma.product.findMany({
+      where: { shopId: req.shopId },
+      orderBy: { name: 'asc' }
+    })
     res.json(products)
   } catch (error) {
+    console.error('Error fetching products:', error)
     res.status(500).json({ message: 'Error fetching products' })
   }
 })
 
 // Get single product
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const product = req.db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)
+    const product = await req.prisma.product.findFirst({
+      where: {
+        id: req.params.id,
+        shopId: req.shopId
+      }
+    })
     if (!product) {
       return res.status(404).json({ message: 'Product not found' })
     }
     res.json(product)
   } catch (error) {
+    console.error('Error fetching product:', error)
     res.status(500).json({ message: 'Error fetching product' })
   }
 })
 
 // Create product (admin and cashier only, manager blocked)
-router.post('/', authorize('admin', 'manager', 'cashier'), blockManagerWrites, (req, res) => {
+router.post('/', authorize('admin', 'manager', 'cashier'), blockManagerWrites, async (req, res) => {
   try {
     const { name, barcode, category, price, cost_price, stock_quantity, min_stock_level, unit } = req.body
     
@@ -51,65 +61,122 @@ router.post('/', authorize('admin', 'manager', 'cashier'), blockManagerWrites, (
     }
     
     const id = uuidv4()
-    const createdAt = getEATDateTime()
+    const createdAt = getEATDateObject() // Use EAT timezone
     const priceNum = parseFloat(price)
     const stockQuantityNum = parseInt(stock_quantity) || 0
-    req.db.prepare(`
-      INSERT INTO products (id, name, barcode, category, price, cost_price, stock_quantity, min_stock_level, unit, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, name, barcode || null, category || null, priceNum, cost_price || null, stockQuantityNum, minStockNum, unit || 'piece', createdAt, createdAt)
     
-    const product = req.db.prepare('SELECT * FROM products WHERE id = ?').get(id)
+    const product = await req.prisma.product.create({
+      data: {
+        id: id,
+        shopId: req.shopId,
+        name: name,
+        barcode: barcode || null,
+        category: category || null,
+        price: priceNum,
+        costPrice: cost_price ? parseFloat(cost_price) : null,
+        stockQuantity: stockQuantityNum,
+        minStockLevel: minStockNum,
+        unit: unit || 'piece',
+        createdAt: createdAt,
+        updatedAt: createdAt
+      }
+    })
+    
     res.status(201).json(product)
   } catch (error) {
+    console.error('Error creating product:', error)
+    if (error.code === 'P2002') {
+      return res.status(400).json({ message: 'Product with this barcode already exists' })
+    }
     res.status(500).json({ message: 'Error creating product', error: error.message })
   }
 })
 
 // Update product (admin and cashier only, manager blocked)
-router.put('/:id', authorize('admin', 'manager', 'cashier'), blockManagerWrites, (req, res) => {
+router.put('/:id', authorize('admin', 'manager', 'cashier'), blockManagerWrites, async (req, res) => {
   try {
     const { name, barcode, category, price, cost_price, stock_quantity, min_stock_level, unit } = req.body
     
-        const updatedAt = getEATDateTime()
-        req.db.prepare(`
-          UPDATE products 
-          SET name = ?, barcode = ?, category = ?, price = ?, cost_price = ?, 
-              stock_quantity = ?, min_stock_level = ?, unit = ?, updated_at = ?
-          WHERE id = ?
-        `).run(name, barcode || null, category || null, priceNum, cost_price || null, 
-               stockQuantityNum, min_stock_level || 0, unit || 'piece', updatedAt, req.params.id)
+    // Check if product exists and belongs to shop
+    const existingProduct = await req.prisma.product.findFirst({
+      where: {
+        id: req.params.id,
+        shopId: req.shopId
+      }
+    })
     
-    const product = req.db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id)
-    if (!product) {
+    if (!existingProduct) {
       return res.status(404).json({ message: 'Product not found' })
     }
+    
+    const priceNum = parseFloat(price)
+    const stockQuantityNum = parseInt(stock_quantity) || existingProduct.stockQuantity
+    
+    const product = await req.prisma.product.update({
+      where: { id: req.params.id },
+      data: {
+        name: name,
+        barcode: barcode || null,
+        category: category || null,
+        price: priceNum,
+        costPrice: cost_price ? parseFloat(cost_price) : null,
+        stockQuantity: stockQuantityNum,
+        minStockLevel: min_stock_level !== undefined ? parseInt(min_stock_level) : existingProduct.minStockLevel,
+        unit: unit || 'piece',
+        updatedAt: getEATDateObject() // Use EAT timezone
+      }
+    })
+    
     res.json(product)
   } catch (error) {
+    console.error('Error updating product:', error)
+    if (error.code === 'P2002') {
+      return res.status(400).json({ message: 'Product with this barcode already exists' })
+    }
     res.status(500).json({ message: 'Error updating product' })
   }
 })
 
 // Delete product (admin only)
-router.delete('/:id', authorize('admin'), (req, res) => {
+router.delete('/:id', authorize('admin'), async (req, res) => {
   try {
-    req.db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id)
+    // Check if product exists and belongs to shop
+    const product = await req.prisma.product.findFirst({
+      where: {
+        id: req.params.id,
+        shopId: req.shopId
+      }
+    })
+    
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' })
+    }
+    
+    await req.prisma.product.delete({
+      where: { id: req.params.id }
+    })
+    
     res.json({ message: 'Product deleted' })
   } catch (error) {
+    console.error('Error deleting product:', error)
     res.status(500).json({ message: 'Error deleting product' })
   }
 })
 
 // Get low stock products
-router.get('/low-stock', (req, res) => {
+router.get('/low-stock', async (req, res) => {
   try {
-    const products = req.db.prepare(`
+    // Prisma doesn't support comparing two columns directly, so we use raw SQL for this query
+    const lowStockProducts = await req.prisma.$queryRaw`
       SELECT * FROM products 
-      WHERE stock_quantity <= min_stock_level 
+      WHERE shop_id = ${req.shopId} 
+      AND stock_quantity <= min_stock_level 
       ORDER BY stock_quantity ASC
-    `).all()
-    res.json(products)
+    `
+    
+    res.json(lowStockProducts)
   } catch (error) {
+    console.error('Error fetching low stock products:', error)
     res.status(500).json({ message: 'Error fetching low stock products' })
   }
 })

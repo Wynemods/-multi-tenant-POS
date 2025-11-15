@@ -42,7 +42,7 @@ const POS = () => {
   const addToCart = (item, type) => {
     // Check if it's a product and if stock is available
     if (type === 'product') {
-      const stock = item.stock_quantity || 0
+      const stock = item.stockQuantity ?? item.stock_quantity ?? 0
       if (stock <= 0) {
         toast.error(`${item.name} is out of stock`)
         return
@@ -77,8 +77,9 @@ const POS = () => {
     const cartItem = cart[index]
     if (cartItem.type === 'product') {
       const product = products.find(p => p.id === cartItem.id)
-      if (product && quantity > (product.stock_quantity || 0)) {
-        toast.error(`Only ${product.stock_quantity} ${product.name} available in stock`)
+      const stock = product?.stockQuantity ?? product?.stock_quantity ?? 0
+      if (product && quantity > stock) {
+        toast.error(`Only ${stock} ${product.name} available in stock`)
         return
       }
     }
@@ -139,10 +140,13 @@ const POS = () => {
                 <h3 className="text-xl font-semibold mb-4 text-gray-700">Products</h3>
                 <div className="grid grid-cols-4 gap-4">
                   {filteredProducts.map(product => {
-                    const stock = product.stock_quantity || 0
-                    const minStock = product.min_stock_level || 0
-                    const isLowStock = stock > 0 && stock <= minStock
+                    // Handle both camelCase (from Prisma) and snake_case formats
+                    const stock = product.stockQuantity ?? product.stock_quantity ?? 0
+                    const minStock = product.minStockLevel ?? product.min_stock_level ?? 0
+                    // Only show out of stock when stock is exactly 0 or negative
                     const isOutOfStock = stock <= 0
+                    // Low stock: stock is above 0 but at or below minimum level
+                    const isLowStock = stock > 0 && stock <= minStock
                     const isDisabled = isReadOnly || isOutOfStock
                     
                     return (
@@ -166,11 +170,11 @@ const POS = () => {
                           isOutOfStock
                             ? 'text-red-600'
                             : isLowStock
-                            ? 'text-red-600'
+                            ? 'text-yellow-600'
                             : 'text-gray-500'
                         }`}>
-                          {isOutOfStock ? 'Out of Stock' : `Stock: ${stock}`}
-                          {isLowStock && !isOutOfStock && ' (Low Stock)'}
+                          {isOutOfStock ? `Out of Stock (${stock})` : `Stock: ${stock}`}
+                          {isLowStock && !isOutOfStock && ' ⚠️ Low'}
                         </p>
                       </button>
                     )

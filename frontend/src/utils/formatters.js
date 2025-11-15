@@ -16,25 +16,32 @@ export const formatCurrencyNumber = (amount) => {
 
 /**
  * Format date/time in EAT (East Africa Time - UTC+3)
- * @param {string} dateString - Date string from database (EAT format: 'YYYY-MM-DD HH:MM:SS')
+ * Handles both ISO date strings from Prisma (UTC) and legacy string format
+ * @param {string|Date} dateInput - Date string (ISO format from Prisma) or Date object
  * @returns {string} Formatted date string in EAT
  */
-export const formatDate = (dateString) => {
-  if (!dateString) return 'N/A'
+export const formatDate = (dateInput) => {
+  if (!dateInput) return 'N/A'
   
   try {
-    // Parse the EAT datetime string from database
-    // Format: 'YYYY-MM-DD HH:MM:SS' (already in EAT/Nairobi time, stored as-is)
-    const [datePart, timePart] = dateString.split(' ')
-    if (!datePart || !timePart) return dateString
+    let date
     
-    const [year, month, day] = datePart.split('-')
-    const [hours, minutes] = timePart.split(':')
-    
-    // The database stores EAT time directly, so we parse it as Nairobi time
-    // Create a date string and parse it as if it's in Nairobi timezone
-    const dateStr = `${year}-${month}-${day}T${hours}:${minutes}:00+03:00`
-    const date = new Date(dateStr)
+    // Handle ISO date strings from Prisma (UTC) or Date objects
+    if (dateInput instanceof Date) {
+      date = dateInput
+    } else if (dateInput.includes('T') || dateInput.includes('Z')) {
+      // ISO format from Prisma (UTC)
+      date = new Date(dateInput)
+    } else {
+      // Legacy format: 'YYYY-MM-DD HH:MM:SS' (assumed to be EAT)
+      const [datePart, timePart] = dateInput.split(' ')
+      if (!datePart || !timePart) return dateInput
+      
+      const [year, month, day] = datePart.split('-')
+      const [hours, minutes] = timePart.split(':')
+      const dateStr = `${year}-${month}-${day}T${hours}:${minutes}:00+03:00`
+      date = new Date(dateStr)
+    }
     
     // Format using Nairobi timezone to ensure correct display
     const options = { 
@@ -49,34 +56,46 @@ export const formatDate = (dateString) => {
     
     return date.toLocaleString('en-KE', options) + ' EAT'
   } catch (error) {
-    // Fallback: format the string directly (it's already in EAT)
+    // Fallback: try to parse as legacy format
     try {
-      const [datePart, timePart] = dateString.split(' ')
-      if (datePart && timePart) {
-        const [year, month, day] = datePart.split('-')
-        const [hours, minutes] = timePart.split(':')
-        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        return `${parseInt(day)} ${monthNames[parseInt(month) - 1]} ${year}, ${hours}:${minutes} EAT`
+      if (typeof dateInput === 'string' && !dateInput.includes('T')) {
+        const [datePart, timePart] = dateInput.split(' ')
+        if (datePart && timePart) {
+          const [year, month, day] = datePart.split('-')
+          const [hours, minutes] = timePart.split(':')
+          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+          return `${parseInt(day)} ${monthNames[parseInt(month) - 1]} ${year}, ${hours}:${minutes} EAT`
+        }
       }
     } catch (e) {
       console.error('Error in formatDate fallback:', e)
     }
-    return dateString
+    return String(dateInput)
   }
 }
 
 /**
  * Format date only (without time) in EAT
- * @param {string} dateString - Date string from database
+ * @param {string|Date} dateInput - Date string (ISO format from Prisma) or Date object
  * @returns {string} Formatted date string
  */
-export const formatDateOnly = (dateString) => {
-  if (!dateString) return 'N/A'
+export const formatDateOnly = (dateInput) => {
+  if (!dateInput) return 'N/A'
   
   try {
-    const [datePart] = dateString.split(' ')
-    const [year, month, day] = datePart.split('-')
-    const date = new Date(`${year}-${month}-${day}`)
+    let date
+    
+    if (dateInput instanceof Date) {
+      date = dateInput
+    } else if (dateInput.includes('T') || dateInput.includes('Z')) {
+      // ISO format from Prisma (UTC)
+      date = new Date(dateInput)
+    } else {
+      // Legacy format
+      const [datePart] = dateInput.split(' ')
+      const [year, month, day] = datePart.split('-')
+      date = new Date(`${year}-${month}-${day}`)
+    }
     
     return date.toLocaleDateString('en-KE', {
       year: 'numeric',
@@ -85,25 +104,42 @@ export const formatDateOnly = (dateString) => {
       timeZone: 'Africa/Nairobi'
     })
   } catch (error) {
-    return dateString
+    return String(dateInput)
   }
 }
 
 /**
  * Format time only in EAT
- * @param {string} dateString - Date string from database
+ * @param {string|Date} dateInput - Date string (ISO format from Prisma) or Date object
  * @returns {string} Formatted time string
  */
-export const formatTime = (dateString) => {
-  if (!dateString) return 'N/A'
+export const formatTime = (dateInput) => {
+  if (!dateInput) return 'N/A'
   
   try {
-    const [, timePart] = dateString.split(' ')
-    if (!timePart) return 'N/A'
+    let date
     
-    const [hours, minutes] = timePart.split(':')
-    return `${hours}:${minutes} EAT`
+    if (dateInput instanceof Date) {
+      date = dateInput
+    } else if (dateInput.includes('T') || dateInput.includes('Z')) {
+      // ISO format from Prisma (UTC)
+      date = new Date(dateInput)
+    } else {
+      // Legacy format
+      const [datePart, timePart] = dateInput.split(' ')
+      if (!timePart) return 'N/A'
+      const [year, month, day] = datePart.split('-')
+      const [hours, minutes] = timePart.split(':')
+      date = new Date(`${year}-${month}-${day}T${hours}:${minutes}:00+03:00`)
+    }
+    
+    return date.toLocaleTimeString('en-KE', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Africa/Nairobi',
+      hour12: false
+    }) + ' EAT'
   } catch (error) {
-    return dateString
+    return String(dateInput)
   }
 }

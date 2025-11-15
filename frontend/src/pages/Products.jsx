@@ -101,9 +101,9 @@ const Products = () => {
       barcode: product.barcode || '',
       category: product.category || '',
       price: product.price,
-      cost_price: product.cost_price || '',
-      stock_quantity: product.stock_quantity,
-      min_stock_level: product.min_stock_level || '',
+      cost_price: product.costPrice ?? product.cost_price ?? '',
+      stock_quantity: product.stockQuantity ?? product.stock_quantity ?? 0,
+      min_stock_level: product.minStockLevel ?? product.min_stock_level ?? '',
       unit: product.unit || 'piece'
     })
     setShowModal(true)
@@ -178,13 +178,21 @@ const Products = () => {
                   <td className="px-4 py-2 whitespace-nowrap text-gray-600 text-sm border-r border-gray-200">{product.category || '-'}</td>
                   <td className="px-4 py-2 whitespace-nowrap text-sm border-r border-gray-200">{formatCurrency(product.price)}</td>
                   <td className="px-4 py-2 whitespace-nowrap text-sm border-r border-gray-200">
-                    {product.stock_quantity <= 0 ? (
-                      <span className="text-red-600 font-semibold text-xs">Out of Stock</span>
-                    ) : (
-                      <span className={product.stock_quantity <= (product.min_stock_level || 0) ? 'text-red-600 font-semibold' : 'text-gray-700'}>
-                        {product.stock_quantity}
-                      </span>
-                    )}
+                    {(() => {
+                      // Handle both camelCase (from Prisma) and snake_case formats
+                      const stock = product.stockQuantity ?? product.stock_quantity ?? 0
+                      const minStock = product.minStockLevel ?? product.min_stock_level ?? 0
+                      const isOutOfStock = stock <= 0
+                      const isLowStock = stock > 0 && stock <= minStock
+                      
+                      if (isOutOfStock) {
+                        return <span className="text-red-600 font-semibold text-xs">Out of Stock</span>
+                      } else if (isLowStock) {
+                        return <span className="text-yellow-600 font-semibold">{stock} (Low)</span>
+                      } else {
+                        return <span className="text-gray-700">{stock}</span>
+                      }
+                    })()}
                   </td>
                   <td className="px-4 py-2 whitespace-nowrap">
                     {!isReadOnly && (

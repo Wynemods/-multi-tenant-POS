@@ -2,14 +2,14 @@ import express from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { authenticate, setShopDb } from '../middleware/auth.js'
 import { blockManagerWrites } from '../middleware/readOnly.js'
-import { getEATDateTime } from '../utils/timezone.js'
+import { getEATDateTime, getEATDateObject } from '../utils/timezone.js'
 
 const router = express.Router()
 
 router.use(authenticate, setShopDb)
 
 // Checkout - Create transaction (manager blocked)
-router.post('/checkout', blockManagerWrites, (req, res) => {
+router.post('/checkout', blockManagerWrites, async (req, res) => {
   try {
     const { items, paymentMethod, total } = req.body
     
@@ -20,16 +20,21 @@ router.post('/checkout', blockManagerWrites, (req, res) => {
     // Validate stock availability for products
     for (const item of items) {
       if (item.type === 'product') {
-        const product = req.db.prepare('SELECT stock_quantity FROM products WHERE id = ?').get(item.id)
+        const product = await req.prisma.product.findFirst({
+          where: {
+            id: item.id,
+            shopId: req.shopId
+          }
+        })
         if (!product) {
           return res.status(404).json({ message: `Product ${item.id} not found` })
         }
-        if (product.stock_quantity < item.quantity) {
+        if (product.stockQuantity < item.quantity) {
           return res.status(400).json({ 
-            message: `Insufficient stock for product. Available: ${product.stock_quantity}, Requested: ${item.quantity}` 
+            message: `Insufficient stock for product. Available: ${product.stockQuantity}, Requested: ${item.quantity}` 
           })
         }
-        if (product.stock_quantity <= 0) {
+        if (product.stockQuantity <= 0) {
           return res.status(400).json({ message: 'Product is out of stock' })
         }
       }
@@ -37,60 +42,108 @@ router.post('/checkout', blockManagerWrites, (req, res) => {
     
     const transactionId = uuidv4()
     const transactionNumber = `TXN-${Date.now()}`
-    const createdAt = getEATDateTime()
+    const createdAt = getEATDateObject() // Use EAT timezone
+    const itemCreatedAt = getEATDateObject()
+    const inventoryLogCreatedAt = getEATDateObject()
     
-    // Create transaction
-    req.db.prepare(`
-      INSERT INTO transactions (id, transaction_number, user_id, total_amount, payment_method, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(transactionId, transactionNumber, req.user.userId, total, paymentMethod, 'completed', createdAt)
-    
-    // Create transaction items and update inventory
-    const itemCreatedAt = getEATDateTime()
-    const insertItem = req.db.prepare(`
-      INSERT INTO transaction_items (id, transaction_id, item_type, item_id, quantity, unit_price, subtotal, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    
-    const inventoryLogCreatedAt = getEATDateTime()
-    const insertInventoryLog = req.db.prepare(`
-      INSERT INTO inventory_logs (id, product_id, transaction_id, change_type, quantity_change, previous_stock, new_stock, user_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    
-    for (const item of items) {
-      const itemId = uuidv4()
-      insertItem.run(itemId, transactionId, item.type, item.id, item.quantity, item.price, item.price * item.quantity, itemCreatedAt)
-      
-      // Update stock if it's a product
-      if (item.type === 'product') {
-        const product = req.db.prepare('SELECT stock_quantity FROM products WHERE id = ?').get(item.id)
-        if (product) {
-          const previousStock = product.stock_quantity
-          const newStock = Math.max(0, previousStock - item.quantity) // Prevent negative stock
-          req.db.prepare('UPDATE products SET stock_quantity = ? WHERE id = ?').run(newStock, item.id)
-          
-          const logId = uuidv4()
-          insertInventoryLog.run(logId, item.id, transactionId, 'sale', -item.quantity, previousStock, newStock, req.user.userId, inventoryLogCreatedAt)
+    // Create transaction, items, update inventory, and create logs in a single transaction
+    const transaction = await req.prisma.$transaction(async (tx) => {
+      // Create transaction
+      const newTransaction = await tx.transaction.create({
+        data: {
+          id: transactionId,
+          shopId: req.shopId,
+          transactionNumber: transactionNumber,
+          userId: req.user.userId,
+          totalAmount: parseFloat(total),
+          paymentMethod: paymentMethod,
+          status: 'completed',
+          createdAt: createdAt
         }
+      })
+      
+      // Create transaction items and update inventory
+      const transactionItems = []
+      for (const item of items) {
+        const itemId = uuidv4()
+        const subtotal = item.price * item.quantity
+        
+        // Create transaction item
+        await tx.transactionItem.create({
+          data: {
+            id: itemId,
+            transactionId: transactionId,
+            itemType: item.type,
+            itemId: item.id,
+            quantity: item.quantity,
+            unitPrice: item.price,
+            subtotal: subtotal,
+            createdAt: itemCreatedAt
+          }
+        })
+        
+        // Update stock if it's a product
+        if (item.type === 'product') {
+          const product = await tx.product.findFirst({
+            where: {
+              id: item.id,
+              shopId: req.shopId
+            }
+          })
+          
+          if (product) {
+            const previousStock = product.stockQuantity
+            const newStock = Math.max(0, previousStock - item.quantity) // Prevent negative stock
+            
+            // Update product stock
+            await tx.product.update({
+              where: { id: item.id },
+              data: { stockQuantity: newStock }
+            })
+            
+            // Create inventory log
+            const logId = uuidv4()
+            await tx.inventoryLog.create({
+              data: {
+                id: logId,
+                shopId: req.shopId,
+                productId: item.id,
+                transactionId: transactionId,
+                changeType: 'sale',
+                quantityChange: -item.quantity,
+                previousStock: previousStock,
+                newStock: newStock,
+                userId: req.user.userId,
+                createdAt: inventoryLogCreatedAt
+              }
+            })
+          }
+        }
+        
+        // Get item name for response
+        let itemName = ''
+        if (item.type === 'product') {
+          const product = await tx.product.findFirst({ where: { id: item.id } })
+          itemName = product?.name || 'Unknown Product'
+        } else {
+          const service = await tx.service.findFirst({ where: { id: item.id } })
+          itemName = service?.name || 'Unknown Service'
+        }
+        
+        transactionItems.push({
+          id: itemId,
+          name: itemName,
+          quantity: item.quantity,
+          unit_price: item.price,
+          subtotal: subtotal
+        })
       }
-    }
-    
-    const transaction = req.db.prepare(`
-      SELECT t.*, 
-             json_group_array(json_object('id', ti.id, 'name', 
-               CASE WHEN ti.item_type = 'product' THEN p.name ELSE s.name END,
-               'quantity', ti.quantity, 'unit_price', ti.unit_price, 'subtotal', ti.subtotal)) as items
-      FROM transactions t
-      LEFT JOIN transaction_items ti ON t.id = ti.transaction_id
-      LEFT JOIN products p ON ti.item_type = 'product' AND ti.item_id = p.id
-      LEFT JOIN services s ON ti.item_type = 'service' AND ti.item_id = s.id
-      WHERE t.id = ?
-      GROUP BY t.id
-    `).get(transactionId)
-    
-    // Parse items JSON
-    transaction.items = JSON.parse(transaction.items || '[]')
+      
+      return {
+        ...newTransaction,
+        items: transactionItems
+      }
+    })
     
     res.status(201).json(transaction)
   } catch (error) {
@@ -100,53 +153,99 @@ router.post('/checkout', blockManagerWrites, (req, res) => {
 })
 
 // Get all transactions
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const transactions = req.db.prepare(`
-      SELECT * FROM transactions 
-      ORDER BY created_at DESC 
-      LIMIT 100
-    `).all()
+    const transactions = await req.prisma.transaction.findMany({
+      where: { shopId: req.shopId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: {
+        items: true
+      }
+    })
     
-    // Get items for each transaction
-    for (const transaction of transactions) {
-      const items = req.db.prepare(`
-        SELECT ti.*, 
-               CASE WHEN ti.item_type = 'product' THEN p.name ELSE s.name END as name
-        FROM transaction_items ti
-        LEFT JOIN products p ON ti.item_type = 'product' AND ti.item_id = p.id
-        LEFT JOIN services s ON ti.item_type = 'service' AND ti.item_id = s.id
-        WHERE ti.transaction_id = ?
-      `).all(transaction.id)
-      transaction.items = items
-    }
+    // Get item names for each transaction item
+    const transactionsWithItems = await Promise.all(
+      transactions.map(async (transaction) => {
+        const itemsWithNames = await Promise.all(
+          transaction.items.map(async (item) => {
+            let name = 'Unknown'
+            if (item.itemType === 'product') {
+              const product = await req.prisma.product.findFirst({
+                where: { id: item.itemId, shopId: req.shopId }
+              })
+              name = product?.name || 'Unknown Product'
+            } else {
+              const service = await req.prisma.service.findFirst({
+                where: { id: item.itemId, shopId: req.shopId }
+              })
+              name = service?.name || 'Unknown Service'
+            }
+            return {
+              ...item,
+              name: name
+            }
+          })
+        )
+        return {
+          ...transaction,
+          items: itemsWithNames
+        }
+      })
+    )
     
-    res.json(transactions)
+    res.json(transactionsWithItems)
   } catch (error) {
+    console.error('Error fetching transactions:', error)
     res.status(500).json({ message: 'Error fetching transactions' })
   }
 })
 
 // Get single transaction
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const transaction = req.db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id)
+    const transaction = await req.prisma.transaction.findFirst({
+      where: {
+        id: req.params.id,
+        shopId: req.shopId
+      },
+      include: {
+        items: true
+      }
+    })
+    
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found' })
     }
     
-    const items = req.db.prepare(`
-      SELECT ti.*, 
-             CASE WHEN ti.item_type = 'product' THEN p.name ELSE s.name END as name
-      FROM transaction_items ti
-      LEFT JOIN products p ON ti.item_type = 'product' AND ti.item_id = p.id
-      LEFT JOIN services s ON ti.item_type = 'service' AND ti.item_id = s.id
-      WHERE ti.transaction_id = ?
-    `).all(transaction.id)
+    // Get item names
+    const itemsWithNames = await Promise.all(
+      transaction.items.map(async (item) => {
+        let name = 'Unknown'
+        if (item.itemType === 'product') {
+          const product = await req.prisma.product.findFirst({
+            where: { id: item.itemId, shopId: req.shopId }
+          })
+          name = product?.name || 'Unknown Product'
+        } else {
+          const service = await req.prisma.service.findFirst({
+            where: { id: item.itemId, shopId: req.shopId }
+          })
+          name = service?.name || 'Unknown Service'
+        }
+        return {
+          ...item,
+          name: name
+        }
+      })
+    )
     
-    transaction.items = items
-    res.json(transaction)
+    res.json({
+      ...transaction,
+      items: itemsWithNames
+    })
   } catch (error) {
+    console.error('Error fetching transaction:', error)
     res.status(500).json({ message: 'Error fetching transaction' })
   }
 })

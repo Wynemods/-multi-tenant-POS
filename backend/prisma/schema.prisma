@@ -1,0 +1,192 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Master table for shop management
+model Shop {
+  id        String   @id @default(uuid())
+  shopName  String   @map("shop_name")
+  ownerName String   @map("owner_name")
+  email     String   @unique
+  phone     String?
+  address   String?
+  createdAt DateTime @default(now()) @map("created_at")
+  
+  // Relations
+  users            User[]
+  products         Product[]
+  services         Service[]
+  transactions     Transaction[]
+  inventoryLogs    InventoryLog[]
+  auditLogs        AuditLog[]
+
+  @@map("shops")
+}
+
+// Users table (multi-tenant with shop_id)
+model User {
+  id           String    @id @default(uuid())
+  shopId       String    @map("shop_id")
+  username     String
+  email        String
+  passwordHash String    @map("password_hash")
+  name         String
+  role         String    @default("cashier") // cashier, manager, admin
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lastLogin    DateTime? @map("last_login")
+
+  // Relations
+  shop            Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  transactions    Transaction[]
+  inventoryLogs   InventoryLog[]
+  auditLogs       AuditLog[]
+
+  @@unique([shopId, email])
+  @@unique([shopId, username])
+  @@index([shopId])
+  @@map("users")
+}
+
+// Products table (multi-tenant with shop_id)
+model Product {
+  id            String   @id @default(uuid())
+  shopId        String   @map("shop_id")
+  name          String
+  barcode       String?  @unique
+  category      String?
+  price         Decimal  @db.Decimal(10, 2)
+  costPrice     Decimal? @map("cost_price") @db.Decimal(10, 2)
+  stockQuantity Int      @default(0) @map("stock_quantity")
+  minStockLevel Int      @default(0) @map("min_stock_level")
+  unit          String   @default("piece")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  shop          Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  inventoryLogs InventoryLog[]
+
+  @@index([shopId])
+  @@index([barcode])
+  @@map("products")
+}
+
+// Services table (multi-tenant with shop_id)
+model Service {
+  id            String   @id @default(uuid())
+  shopId        String   @map("shop_id")
+  name          String
+  description   String?
+  price         Decimal  @db.Decimal(10, 2)
+  durationMinutes Int?   @map("duration_minutes")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  shop            Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+  @@map("services")
+}
+
+// Transactions table (multi-tenant with shop_id)
+model Transaction {
+  id              String   @id @default(uuid())
+  shopId          String   @map("shop_id")
+  transactionNumber String @unique @map("transaction_number")
+  userId          String   @map("user_id")
+  totalAmount     Decimal  @map("total_amount") @db.Decimal(10, 2)
+  paymentMethod   String   @map("payment_method")
+  status          String   @default("completed")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Relations
+  shop            Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  user            User            @relation(fields: [userId], references: [id])
+  items           TransactionItem[]
+  inventoryLogs   InventoryLog[]
+
+  @@index([shopId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("transactions")
+}
+
+// Transaction Items table
+model TransactionItem {
+  id            String   @id @default(uuid())
+  transactionId String   @map("transaction_id")
+  itemType      String   @map("item_type") // 'product' or 'service'
+  itemId        String   @map("item_id")
+  quantity      Int
+  unitPrice     Decimal  @map("unit_price") @db.Decimal(10, 2)
+  subtotal      Decimal  @db.Decimal(10, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  // Note: itemId can reference either Product or Service based on itemType
+  // We handle this in application code rather than Prisma relations
+
+  @@index([transactionId])
+  @@index([itemId, itemType])
+  @@map("transaction_items")
+}
+
+// Inventory Logs table (multi-tenant with shop_id)
+model InventoryLog {
+  id            String    @id @default(uuid())
+  shopId        String    @map("shop_id")
+  productId     String    @map("product_id")
+  transactionId String?   @map("transaction_id")
+  changeType    String    @map("change_type") // 'restock', 'sale', 'adjustment'
+  quantityChange Int      @map("quantity_change")
+  previousStock Int       @map("previous_stock")
+  newStock      Int       @map("new_stock")
+  notes         String?
+  userId        String?   @map("user_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  shop        Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product     Product     @relation(fields: [productId], references: [id])
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+  user        User?       @relation(fields: [userId], references: [id])
+
+  @@index([shopId])
+  @@index([productId])
+  @@index([createdAt])
+  @@map("inventory_logs")
+}
+
+// Audit Logs table (multi-tenant with shop_id)
+model AuditLog {
+  id        String   @id @default(uuid())
+  shopId    String   @map("shop_id")
+  userId    String?  @map("user_id")
+  action    String
+  tableName String?  @map("table_name")
+  recordId  String?  @map("record_id")
+  oldValues String?  @map("old_values") @db.Text
+  newValues String?  @map("new_values") @db.Text
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  shop Shop  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([shopId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
