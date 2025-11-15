@@ -12,7 +12,7 @@ const router = express.Router()
 // Register new user (manager or cashier) to existing shop
 router.post('/register', async (req, res) => {
   try {
-    const { shopId, name, email, password, role } = req.body
+    const { shopId, name, email, password, role, username } = req.body  // Add username here
     
     if (!shopId || !name || !email || !password || !role) {
       return res.status(400).json({ message: 'Missing required fields' })
@@ -35,6 +35,7 @@ router.post('/register', async (req, res) => {
     // Check if user already exists with this email (regardless of role)
     const existingUser = shopDb.prepare('SELECT * FROM users WHERE email = ?').get(email)
     if (existingUser) {
+      shopDb.close()
       return res.status(400).json({ 
         message: 'User with this email already exists in this shop. Please use a different email or contact admin.' 
       })
@@ -43,18 +44,30 @@ router.post('/register', async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10)
     const userId = uuidv4()
+    const createdAt = getEATDateTime()  // Use proper timezone function instead of Date.now()
+    
+    // Generate username if not provided
+    const finalUsername = username || email.split('@')[0]
     
     // Create user in shop database
     try {
       shopDb.prepare(`
-        INSERT INTO users (id, username, email, password_hash, name, role)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(userId, email, email, hashedPassword, name, role)
+        INSERT INTO users (id, username, email, password_hash, name, role, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        userId, 
+        finalUsername,
+        email, 
+        hashedPassword, 
+        name, 
+        role, 
+        createdAt
+      )
     } catch (dbError) {
       shopDb.close()
       if (dbError.code === 'SQLITE_CONSTRAINT_UNIQUE') {
         return res.status(400).json({ 
-          message: 'User with this email already exists in this shop. Please use a different email.' 
+          message: 'User with this email or username already exists in this shop. Please use different credentials.' 
         })
       }
       throw dbError
@@ -64,7 +77,8 @@ router.post('/register', async (req, res) => {
     
     res.status(201).json({
       message: 'Registration successful',
-      role: role
+      role: role,
+      username: finalUsername
     })
   } catch (error) {
     console.error('Registration error:', error)
